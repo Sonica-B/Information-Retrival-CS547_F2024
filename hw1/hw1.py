@@ -94,14 +94,14 @@ class Index(object):
 
                 tokens = self.tokenize(text)
                 stemmed_tokens = self.stemming(tokens)
-                print(stemmed_tokens)
+                #print(stemmed_tokens)
                 for token in stemmed_tokens:
                     if token not in self._inverted_index:
                         self._inverted_index[token] = set()
                     self._inverted_index[token].add(len(self._documents)-1)
 
                 num_files_indexed += 1
-        print(self._inverted_index)
+       # print(self._inverted_index)
         return num_files_indexed
 
     # tokenize( text )

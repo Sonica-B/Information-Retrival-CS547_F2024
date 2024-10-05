@@ -8,6 +8,7 @@ __pycache__/
 .idea
 .gitignore
 
+
 # Distribution / packaging
 .Python
 build/

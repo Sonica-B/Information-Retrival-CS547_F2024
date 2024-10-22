@@ -83,15 +83,21 @@ class PageRankIndex(object):
             print(f"Error fetching {url}: {e}")
             return
 
+        # Extract text from <p> and <div> tags (you can add more tags if needed)
+        paragraphs = soup.find_all(['p', 'div'])
+        text = " ".join([p.get_text(strip=True) for p in paragraphs])
+
         # Tokenize the visible text in the HTML content
-        text = soup.get_text()
         tokens = self.tokenize(text)
 
-        # DEBUG: Print tokens
-        print(f"Tokens extracted from {url}: {tokens}")
+        # Filter out tokens that are too short or numeric
+        filtered_tokens = [token for token in tokens if len(token) > 1 and not token.isdigit()]
 
-        # Store tokens in the inverted index
-        for token in tokens:
+        # DEBUG: Print filtered tokens
+        print(f"Filtered Tokens extracted from {url}: {filtered_tokens}")
+
+        # Store filtered tokens in the inverted index
+        for token in filtered_tokens:
             self.index[token].append(url)
 
         # Find and store outlinks (href links to other URLs)
@@ -100,10 +106,7 @@ class PageRankIndex(object):
             self.outlinks[url].add(full_url)
             self.urls.add(full_url)
 
-        # DEBUG: Print inverted index after processing
-        print(f"Inverted index after indexing {url}: {dict(self.index)}")
-
-        return len(tokens)
+        return len(filtered_tokens)
 
 
     # tokenize( text )

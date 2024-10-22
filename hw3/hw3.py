@@ -40,10 +40,10 @@ student = cs547.Student(
 # ########################################
 
 import bs4 as BeautifulSoup  # you will want this for parsing html documents
-from bs4 import BeautifulSoup
 import urllib.request
-import numpy as np
+from bs4 import BeautifulSoup
 from collections import defaultdict
+import urllib.parse
 
 # our index class definition will hold all logic necessary to create and search
 # an index created from a web directory
@@ -59,11 +59,10 @@ class PageRankIndex(object):
         # you'll want to create something here to hold your index, and other
         # necessary data members
 
-        self.index = defaultdict(list)  # Maps terms to URLs containing them
-        self.outlinks = defaultdict(list)  # Maps URLs to outgoing links
-        self.inlinks = defaultdict(list)  # Maps URLs to incoming links
-        self.pagerank = {}  # Store PageRank of URLs
-        self.urls = set()  # Set of all URLs crawled (initialize here)
+        self.index = defaultdict(list)  # Dictionary to store inverted index
+        self.urls = set()  # Store all unique URLs
+        self.outlinks = defaultdict(set)  # Store outlinks for each URL
+
 
 
     # index_url( url )
@@ -76,50 +75,36 @@ class PageRankIndex(object):
     #   url - a string containing a url to begin indexing at
 
     def index_url(self, url):
-        # Crawl starting from given URL
-        num_files = 0
-        to_crawl = [url]  # Queue of URLs to crawl
-        crawled = set()  # Keep track of crawled URLs
+        # Retrieve and parse the content of the URL
+        try:
+            response = urllib.request.urlopen(url)
+            soup = BeautifulSoup(response, 'html.parser')
+        except Exception as e:
+            print(f"Error fetching {url}: {e}")
+            return
 
-        while to_crawl:
-            current_url = to_crawl.pop(0)
-            if current_url in crawled:
-                continue
-            crawled.add(current_url)
+        # Tokenize the visible text in the HTML content
+        text = soup.get_text()
+        tokens = self.tokenize(text)
 
-            # Fetch and parse the HTML of the current URL
-            try:
-                response = urllib.request.urlopen(current_url)
-                html = response.read().decode('utf-8')
+        # DEBUG: Print tokens
+        print(f"Tokens extracted from {url}: {tokens}")
 
-                # Make sure BeautifulSoup is used correctly
-                soup = BeautifulSoup(html, 'html.parser')
+        # Store tokens in the inverted index
+        for token in tokens:
+            self.index[token].append(url)
 
-                num_files += 1
-                self.urls.add(current_url)
+        # Find and store outlinks (href links to other URLs)
+        for link in soup.find_all('a', href=True):
+            full_url = urllib.parse.urljoin(url, link['href'])
+            self.outlinks[url].add(full_url)
+            self.urls.add(full_url)
 
-                # Extract tokens and index them
-                tokens = self.tokenize(soup.get_text())
-                for token in tokens:
-                    self.index[token].append(current_url)
+        # DEBUG: Print inverted index after processing
+        print(f"Inverted index after indexing {url}: {dict(self.index)}")
 
-                # Find all outgoing links (anchor tags)
-                for anchor in soup.find_all('a', href=True):
-                    link = anchor['href']
-                    if link.startswith('http') and link not in self.outlinks[current_url]:
-                        self.outlinks[current_url].append(link)
-                        self.inlinks[link].append(current_url)
-                        if link not in crawled and link not in to_crawl:
-                            to_crawl.append(link)
+        return len(tokens)
 
-            except Exception as e:
-                print(f"Error crawling {current_url}: {e}")
-                continue
-
-        # After crawling, compute PageRank
-        self._compute_pagerank()
-
-        return num_files
 
     # tokenize( text )
     # purpose: convert a string of terms into a list of terms 
@@ -128,7 +113,7 @@ class PageRankIndex(object):
     # parameters:
     #   text - a string of terms
     def tokenize(self, text):
-        # Convert text to lowercase and split on non-alphanumeric characters
+
         tokens = []
         current_token = []
 
@@ -154,55 +139,24 @@ class PageRankIndex(object):
     # parameters:
     #   text - a string of query terms
     def ranked_search(self, text):
-        # Tokenize the query
+
+        # Tokenize the search query using the same function
         query_tokens = self.tokenize(text)
 
-        # Find URLs that contain all query terms
-        result_urls = set(self.index.get(query_tokens[0], []))
+        # DEBUG: Print query tokens
+        print(f"Tokens for query '{text}': {query_tokens}")
+
+        # Check if tokens are in the index and collect matching URLs
+        if not query_tokens:
+            return []
+
+        results = set(self.index.get(query_tokens[0], []))  # Start with first token's results
         for token in query_tokens[1:]:
-            result_urls &= set(self.index.get(token, []))
+            results.intersection_update(self.index.get(token, []))  # Filter URLs matching all tokens
 
-        # Convert results into a NumPy array for efficient sorting
-        if result_urls:
-            results = np.array([(url, self.pagerank.get(url, 0)) for url in result_urls])
-            # Sort by PageRank (descending)
-            sorted_results = results[results[:, 1].argsort()[::-1]]
-            return sorted_results[:10].tolist()
+        return list(results)
 
-        return []
 
-    def _compute_pagerank(self, d=0.1, max_iterations=100, tol=1e-6):
-        N = len(self.urls)
-        if N == 0:
-            return
-
-        # Initialize PageRank array
-        pagerank = np.ones(N) / N  # Start with equal probability
-        url_list = list(self.urls)
-        url_index = {url: i for i, url in enumerate(url_list)}
-
-        # Create adjacency matrix A (stochastic matrix)
-        A = np.zeros((N, N))
-        for i, url in enumerate(url_list):
-            if self.outlinks[url]:
-                out_deg = len(self.outlinks[url])
-                for outlink in self.outlinks[url]:
-                    if outlink in url_index:
-                        j = url_index[outlink]
-                        A[j, i] = 1 / out_deg
-
-        # Power iteration: PageRank computation
-        teleport = np.ones(N) / N  # Teleportation array
-        for _ in range(max_iterations):
-            new_pagerank = d * teleport + (1 - d) * A.dot(pagerank)
-
-            # Check for convergence (L1 norm difference)
-            if np.linalg.norm(new_pagerank - pagerank, 1) < tol:
-                break
-            pagerank = new_pagerank
-
-        # Assign the computed PageRank back to URLs
-        self.pagerank = {url_list[i]: pagerank[i] for i in range(N)}
 
 
 

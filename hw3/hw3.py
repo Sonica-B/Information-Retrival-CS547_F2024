@@ -40,10 +40,11 @@ student = cs547.Student(
 # ########################################
 
 import bs4 as BeautifulSoup  # you will want this for parsing html documents
-import urllib.request
-from bs4 import BeautifulSoup
+import re
 from collections import defaultdict
-import urllib.parse
+from urllib.parse import urljoin
+from bs4 import BeautifulSoup
+import urllib.request
 
 # our index class definition will hold all logic necessary to create and search
 # an index created from a web directory
@@ -59,10 +60,11 @@ class PageRankIndex(object):
         # you'll want to create something here to hold your index, and other
         # necessary data members
 
-        self.index = defaultdict(list)  # Dictionary to store inverted index
-        self.urls = set()  # Store all unique URLs
-        self.outlinks = defaultdict(set)  # Store outlinks for each URL
-
+        self.index = defaultdict(list)  # Store tokens and their corresponding URLs
+        self.pagerank_scores = defaultdict(float)  # Store PageRank scores
+        self.outgoing_links = defaultdict(set)  # Store outgoing links for each URL
+        self.incoming_links = defaultdict(set)  # Store incoming links for each URL
+        self.urls = set()  # Keep track of all URLs indexed
 
 
     # index_url( url )
@@ -75,39 +77,57 @@ class PageRankIndex(object):
     #   url - a string containing a url to begin indexing at
 
     def index_url(self, url):
-        # Retrieve and parse the content of the URL
+        """Parse the index page and find all valid anchor tags (links)"""
+        # Fetch and parse the URL
         try:
             response = urllib.request.urlopen(url)
-            soup = BeautifulSoup(response, 'html.parser')
+            html = response.read().decode('utf-8')
+            soup = BeautifulSoup(html, 'html.parser')
+
+            # Tokenize the content and update index
+            text = soup.get_text()
+            tokens = self.tokenize(text)
+            for token in tokens:
+                self.index[token].append(url)
+
+            # Extract <a> tags only
+            for link in soup.find_all('a', href=True):
+                full_url = urljoin(url, link['href'])
+                if full_url not in self.urls:
+                    self.index_url(full_url)  # Recursively index linked URLs
+                    print(self.index)
+                self.outgoing_links[url].add(full_url)
+                self.incoming_links[full_url].add(url)
+                print(self.outgoing_links)
+                print(self.incoming_links)
+            self.urls.add(url)
+
         except Exception as e:
-            print(f"Error fetching {url}: {e}")
-            return
+            print(f"Error indexing URL {url}: {e}")
 
-        # Extract text from <p> and <div> tags (you can add more tags if needed)
-        paragraphs = soup.find_all(['p', 'div'])
-        text = " ".join([p.get_text(strip=True) for p in paragraphs])
 
-        # Tokenize the visible text in the HTML content
-        tokens = self.tokenize(text)
-
-        # Filter out tokens that are too short or numeric
-        filtered_tokens = [token for token in tokens if len(token) > 1 and not token.isdigit()]
-
-        # DEBUG: Print filtered tokens
-        print(f"Filtered Tokens extracted from {url}: {filtered_tokens}")
-
-        # Store filtered tokens in the inverted index
-        for token in filtered_tokens:
-            self.index[token].append(url)
-
-        # Find and store outlinks (href links to other URLs)
-        for link in soup.find_all('a', href=True):
-            full_url = urllib.parse.urljoin(url, link['href'])
-            self.outlinks[url].add(full_url)
-            self.urls.add(full_url)
-
-        return len(filtered_tokens)
-
+# def build_graph(self, index_url):
+#         """Build the web graph starting from the index page"""
+#         print(f"Indexing root page: {index_url}")
+#         links = self.index_url(index_url)
+#
+#         # Add the root as a node and link it to the extracted links
+#         self.graph[index_url].extend(links)
+#
+#         # Now visit each link and extract further links if they are part of the corpus
+#         for link in links:
+#             if link not in self.graph:  # Only process if not already visited
+#                 if link in self.corpus:  # Check if it exists in our web corpus
+#                     print(f"Indexing linked page: {link}")
+#                     sub_links = self.index_url(link)
+#                     self.graph[link].extend(sub_links)
+#                 else:
+#                     print(f"Treating {link} as a leaf node (outside corpus)")
+#
+#         # DEBUG: Print web graph
+#         print("\nWeb Graph:")
+#         for page, links in self.graph.items():
+#             print(f"{page} -> {links}")
 
     # tokenize( text )
     # purpose: convert a string of terms into a list of terms 
@@ -116,21 +136,44 @@ class PageRankIndex(object):
     # parameters:
     #   text - a string of terms
     def tokenize(self, text):
+        return re.findall(r'[a-z0-9]+', text.lower())
+        # tokens = []
+        # current_token = []
+        #
+        # for char in text:
+        #     if char.isalnum():  # Accept alphanumeric characters
+        #         current_token.append(char)
+        #     elif current_token:
+        #         tokens.append("".join(current_token).lower())  # Convert token to lowercase
+        #         current_token = []
+        #
+        # if current_token:
+        #     tokens.append("".join(current_token).lower())  # Add last token
+        #
+        # return tokens
 
-        tokens = []
-        current_token = []
 
-        for char in text.lower():
-            if char.isalnum():
-                current_token.append(char)
-            elif current_token:
-                tokens.append("".join(current_token))
-                current_token = []
 
-        if current_token:
-            tokens.append("".join(current_token))
+    def compute_pagerank(self, d=0.9, max_iterations=100, tol=1.0e-6):
+            # Initialize PageRank scores
+            N = len(self.urls)
+            for url in self.urls:
+                self.pagerank_scores[url] = 1.0 / N
 
-        return tokens
+            for i in range(max_iterations):
+                new_pagerank_scores = defaultdict(float)
+
+                # Compute PageRank for each URL
+                for url in self.urls:
+                    rank_sum = sum(self.pagerank_scores[link] / len(self.outgoing_links[link]) for link in
+                                   self.incoming_links[url])
+                    new_pagerank_scores[url] = (1 - d) / N + d * rank_sum
+
+                # Check for convergence
+                if all(abs(new_pagerank_scores[url] - self.pagerank_scores[url]) < tol for url in self.urls):
+                    break
+
+                self.pagerank_scores = new_pagerank_scores
 
 
     # ranked_search( text )
@@ -142,24 +185,21 @@ class PageRankIndex(object):
     # parameters:
     #   text - a string of query terms
     def ranked_search(self, text):
+        # Tokenize search text
+        tokens = self.tokenize(text)
+        results = defaultdict(float)
 
-        # Tokenize the search query using the same function
-        query_tokens = self.tokenize(text)
+        # Find documents containing all tokens
+        for token in tokens:
+            if token in self.index:
+                for url in self.index[token]:
+                    results[url] += self.pagerank_scores[url]
 
-        # DEBUG: Print query tokens
-        print(f"Tokens for query '{text}': {query_tokens}")
+        # Sort results by PageRank score (descending)
+        ranked_results = sorted(results.items(), key=lambda x: x[1], reverse=True)
 
-        # Check if tokens are in the index and collect matching URLs
-        if not query_tokens:
-            return []
-
-        results = set(self.index.get(query_tokens[0], []))  # Start with first token's results
-        for token in query_tokens[1:]:
-            results.intersection_update(self.index.get(token, []))  # Filter URLs matching all tokens
-
-        return list(results)
-
-
+        # Return top 10 results
+        return ranked_results[:10]
 
 
 

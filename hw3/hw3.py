@@ -38,7 +38,7 @@ student = cs547.Student(
 # ########################################
 # now, write some code
 # ########################################
-
+import numpy as np
 import bs4 as BeautifulSoup  # you will want this for parsing html documents
 import re
 from collections import defaultdict
@@ -60,11 +60,12 @@ class PageRankIndex(object):
         # you'll want to create something here to hold your index, and other
         # necessary data members
 
-        self.index = defaultdict(list)  # Store tokens and their corresponding URLs
-        self.pagerank_scores = defaultdict(float)  # Store PageRank scores
-        self.outgoing_links = defaultdict(set)  # Store outgoing links for each URL
-        self.incoming_links = defaultdict(set)  # Store incoming links for each URL
-        self.urls = set()  # Keep track of all URLs indexed
+        self.index = defaultdict(set)  # Inverted index
+        self.urls = set()              # All indexed URLs
+        self.links = defaultdict(set)  # Outgoing links per URL
+        self.pagerank_scores = {}      # PageRank scores
+        self.max_depth = 5
+        self.depth = 0
 
 
     # index_url( url )
@@ -77,57 +78,37 @@ class PageRankIndex(object):
     #   url - a string containing a url to begin indexing at
 
     def index_url(self, url):
-        """Parse the index page and find all valid anchor tags (links)"""
-        # Fetch and parse the URL
+
+        """Crawl and index the given URL, with a max recursion depth to prevent infinite recursion."""
+        if self.depth > self.max_depth:
+            return
+
         try:
             response = urllib.request.urlopen(url)
             html = response.read().decode('utf-8')
             soup = BeautifulSoup(html, 'html.parser')
 
-            # Tokenize the content and update index
-            text = soup.get_text()
-            tokens = self.tokenize(text)
-            for token in tokens:
-                self.index[token].append(url)
-
-            # Extract <a> tags only
-            for link in soup.find_all('a', href=True):
-                full_url = urljoin(url, link['href'])
-                if full_url not in self.urls:
-                    self.index_url(full_url)  # Recursively index linked URLs
-                    print(self.index)
-                self.outgoing_links[url].add(full_url)
-                self.incoming_links[full_url].add(url)
-                print(self.outgoing_links)
-                print(self.incoming_links)
+            # Add URL to the set of indexed URLs
             self.urls.add(url)
 
+            # Tokenize and index the content
+            content = soup.get_text()
+            tokens = self.tokenize(content)
+            for token in tokens:
+                self.index[token].add(url)
+
+            # Extract hyperlinks
+            for link in soup.find_all('a', href=True):
+                href = urljoin(url, link['href'])
+                if href not in self.urls:  # Only follow new links
+                    self.links[url].add(href)
+                    self.depth = self.depth + 1
+                    self.index_url(href)
+
         except Exception as e:
-            print(f"Error indexing URL {url}: {e}")
+            print(f"Error indexing {url}: {e}")
 
-
-# def build_graph(self, index_url):
-#         """Build the web graph starting from the index page"""
-#         print(f"Indexing root page: {index_url}")
-#         links = self.index_url(index_url)
-#
-#         # Add the root as a node and link it to the extracted links
-#         self.graph[index_url].extend(links)
-#
-#         # Now visit each link and extract further links if they are part of the corpus
-#         for link in links:
-#             if link not in self.graph:  # Only process if not already visited
-#                 if link in self.corpus:  # Check if it exists in our web corpus
-#                     print(f"Indexing linked page: {link}")
-#                     sub_links = self.index_url(link)
-#                     self.graph[link].extend(sub_links)
-#                 else:
-#                     print(f"Treating {link} as a leaf node (outside corpus)")
-#
-#         # DEBUG: Print web graph
-#         print("\nWeb Graph:")
-#         for page, links in self.graph.items():
-#             print(f"{page} -> {links}")
+        return 0
 
     # tokenize( text )
     # purpose: convert a string of terms into a list of terms 
@@ -136,44 +117,41 @@ class PageRankIndex(object):
     # parameters:
     #   text - a string of terms
     def tokenize(self, text):
-        return re.findall(r'[a-z0-9]+', text.lower())
-        # tokens = []
-        # current_token = []
-        #
-        # for char in text:
-        #     if char.isalnum():  # Accept alphanumeric characters
-        #         current_token.append(char)
-        #     elif current_token:
-        #         tokens.append("".join(current_token).lower())  # Convert token to lowercase
-        #         current_token = []
-        #
-        # if current_token:
-        #     tokens.append("".join(current_token).lower())  # Add last token
-        #
-        # return tokens
+        """Convert input text into a list of lowercase alphanumeric tokens."""
+        return re.findall(r'[a-zA-Z0-9]+', text.lower())
 
 
 
-    def compute_pagerank(self, d=0.9, max_iterations=100, tol=1.0e-6):
-            # Initialize PageRank scores
-            N = len(self.urls)
-            for url in self.urls:
-                self.pagerank_scores[url] = 1.0 / N
+    def calculate_pagerank(self, d=0.1, tol=1.0e-6, max_iter=100):
+        """Calculate PageRank scores using Numpy for matrix operations."""
+        N = len(self.urls)
+        if N == 0:
+            return
 
-            for i in range(max_iterations):
-                new_pagerank_scores = defaultdict(float)
+        url_list = list(self.urls)
+        url_index = {url: i for i, url in enumerate(url_list)}
+        M = np.zeros((N, N))
 
-                # Compute PageRank for each URL
-                for url in self.urls:
-                    rank_sum = sum(self.pagerank_scores[link] / len(self.outgoing_links[link]) for link in
-                                   self.incoming_links[url])
-                    new_pagerank_scores[url] = (1 - d) / N + d * rank_sum
+        # Build the adjacency matrix
+        for url, outgoing_links in self.links.items():
+            if len(outgoing_links) > 0:
+                for link in outgoing_links:
+                    if link in url_index:
+                        M[url_index[link], url_index[url]] = 1 / len(outgoing_links)
 
-                # Check for convergence
-                if all(abs(new_pagerank_scores[url] - self.pagerank_scores[url]) < tol for url in self.urls):
-                    break
+        # Initialize PageRank vector
+        rank = np.ones(N) / N
+        teleport = np.ones(N) / N
 
-                self.pagerank_scores = new_pagerank_scores
+        # PageRank iteration
+        for i in range(max_iter):
+            new_rank = (1 - d) * teleport + d * M @ rank
+            if np.linalg.norm(new_rank - rank, 1) < tol:
+                break
+            rank = new_rank
+
+        # Store PageRank scores
+        self.pagerank_scores = {url_list[i]: rank[i] for i in range(N)}
 
 
     # ranked_search( text )
@@ -185,20 +163,15 @@ class PageRankIndex(object):
     # parameters:
     #   text - a string of query terms
     def ranked_search(self, text):
-        # Tokenize search text
         tokens = self.tokenize(text)
         results = defaultdict(float)
 
-        # Find documents containing all tokens
         for token in tokens:
             if token in self.index:
                 for url in self.index[token]:
-                    results[url] += self.pagerank_scores[url]
+                    results[url] += self.pagerank_scores.get(url, 0)
 
-        # Sort results by PageRank score (descending)
         ranked_results = sorted(results.items(), key=lambda x: x[1], reverse=True)
-
-        # Return top 10 results
         return ranked_results[:10]
 
 
